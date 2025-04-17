@@ -1,0 +1,247 @@
+---
+format: pdf
+editor: visual
+execute:
+  echo: false
+  warning: false
+  error: false
+header-includes:
+  - \usepackage{float}
+  - \floatplacement{figure}{H}
+bibliography: 202501.bib
+csl: https://www.zotero.org/styles/apa-single-spaced
+mainfont: "Avenir"
+sansfont: "Avenir"
+monofont: "Andale Mono"
+fontsize: 10.5pt
+geometry: 
+  - margin = 1in
+linestretch: 1.5
+pdf-engine: xelatex
+---
+
+# Predicting Children's Weight with Frequentist & Bayesian Mixed Modelling
+
+*Author: P. Z. Vivian Hsu • Date: April 17, 2025*
+
+\noindent
+
+\rule{\linewidth}{0.4pt}
+
+## Introduction
+
+## Data Exploration
+
+```{r setup, output=FALSE}
+# ----- SETUP ----- #
+library(tidyverse)
+library(faraway)
+library(lme4)
+library(performance)
+library(ggeffects)
+library(rstanarm)
+library(MCMCglmm)
+library(bayesplot)
+library(bayestestR)
+library(dotwhisker)
+library(lattice)
+library(broom.mixed)
+
+```
+
+We first clean up the data by excluding height, converting sex to a factor, and removing missing values from the data set. The rest of this section will use the clean data and so this will be a complete case analysis.
+
+```{r trans1}
+# ----- DATA TRANSFORMATION ----- #
+nepali2 <- nepali %>% 
+  filter(!is.na(wt)) %>% 
+  dplyr::select(-ht) %>% 
+  mutate(sex = factor(sex), 
+         lit = factor(lit))
+head(nepali2,5)
+
+```
+
+Below we perform data visualization. From the scatter plots, there appears to be:
+
+-   An upward linear trend between weight and the child's age.
+-   A somewhat upward linear trend between weight and the mother's age.
+-   No strong trend between weight and the number of children the mother has had that died.
+-   No apparent trend between weight and the number of children the mother had born alive.
+
+These trends do not appear to differ by sex. As for the box plot:
+
+-   For male children, the mean weight appears to be larger for those with illiterate mothers vs literate mothers.
+-   For female children, the mean weight appears to be larger for those with literate mothers vs illiterate mothers.
+-   However, there is a quite a bit of variability (and overlapping variability as well), so it's hard to tell whether the literacy status has an effect on the child's weight or not.
+
+```{r viz1}
+# ----- DATA VISUALIZATION ----- #
+ggplot(data=nepali2, aes(x=age, y=wt, color=sex)) + geom_point()
+ggplot(data=nepali2, aes(x=mage, y=wt, color=sex)) + geom_point()
+ggplot(data=nepali2, aes(x=died, y=wt, color=sex)) + geom_point()
+ggplot(data=nepali2, aes(x=alive, y=wt, color=sex)) + geom_point()
+ggplot(data=nepali2, aes(x=lit, y=wt, color=sex)) + geom_boxplot()
+
+```
+
+## Frequentist Mixed Model
+
+We now fit a mixed model. Based on the visualization, we will use sex, age, mother's age, and mother's literacy status as predictors since they appear to show at least some trend with weight. We exclude the number of children who died and the number of children born alive because they do not show any trends. Age will be a random effect in the model since weight may vary by age.
+
+```{r freqmix1}
+# ----- FREQUENTIST MIXED MODEL ----- #
+nep_mod_mm <- lmer(wt ~ sex + mage + lit + age + (age | id), data = nepali2, REML = TRUE)
+```
+
+Below are the model diagnostics:
+
+-   In the posterior predictive check, the model-predicted lines mostly resemble the observed data line.
+-   In the fitted vs. residuals plot, the reference line appears to be mostly flat except at the start of the chart. This suggests the linear assumption may be violated.
+-   In the scale-location plot, the reference line is curved rather than flat. This suggests there may be heteroscedasticity.
+-   In the leverage vs. residuals plot, none of the points are outside of Cook's distance. Thus, there are most likely no outliers.
+-   In the collinearity plot, there appears age and sex appear to have a high collinearity. However, we will keep this in the model because dropping age and sex from the model would mean we would have to interpret the model in their absence, which is not representative of reality.
+-   In the QQ-plot, most of the points are on the line. However, the points on the tails of the chart appear to not follow the straight line. This suggests that the residuals may not be normal.
+
+```{r freqmix2, fig.height=12, fig.width=8}
+performance::check_model(nep_mod_mm)
+```
+
+In attempt to fix the non-linearity and heteroscedasticity, we tried applying log, inverse, and square root transformations to the response variable. However, these transformations did not improve the diagnostics (in fact, log and inverse transformations appeared to worsen the problems). I have left out the model diagnostics for these transformed models as they are lengthy to read.
+
+Since we are unable to obtain a better model without a substantial amount of effort, we will keep the original model as shown in the summary below. We highlight some of the key takeaways from the summary:
+
+-   From the random effects section, we can see that age varies by a factor of about 0.0013 months across individuals.
+-   From the fixed effects section, we can see that age, mother's age, and sex appear to have a significant impact on weight (in order from greatest significance to least).
+    -   The mother's literacy status does not have a significant impact on weight.
+    -   For every month of increase in the child's age, weight increases by a factor of 2.524.
+    -   For every year of increase in the mother's age, the child's weight increases by a factor of 0.288.
+-   From the correlation of fixed effects section, there does not appear to be any high correlation between the predictors. Correlation is low.
+
+```{r freqmix3}
+summary(nep_mod_mm)
+```
+
+Now we use the model to predict weight. From the scatterplot below, we can see that the model predicts the data fairly well. This is especially the case when age is low as the distance between predictions and observations is relatively low. As age increases, the distance between the predictions and observations also increase. Further work to reduce the heteroscedasticity may improve future model predictions.
+
+```{r freqmix4}
+nep_mod_mm_pred <- ggpredict(nep_mod_mm, terms = c("age", "sex"))
+pp <- plot(nep_mod_mm_pred)
+bb <- ggplot_build(pp)
+
+pp + stat_sum(data = nepali2,
+              aes(x = age, y = wt, colour = sex),
+              fill = NA) +
+    stat_summary(data = nepali2,
+                 aes(x = age, y = wt, colour = sex),
+                 fill = NA,
+                 geom = "point",
+                 fun = mean)
+
+```
+
+The original paper by West et al. [@nepaliStudy] performs this analysis using different variables. Therefore, it is difficult to compare their model with ours.
+
+## Bayesian Mixed Model
+
+We will redo Question 1 using the rstanarm and MCMCglmm packages. We'll start with rstanarm.
+
+```{r trans2, cache=TRUE}
+# ----- DATA TRANSFORMATION ----- #
+nepali3 <- nepali %>% 
+  filter(!is.na(wt)) %>% 
+  dplyr::select(-ht) %>% 
+  mutate(sex = scale(as.numeric(sex)), 
+         lit = scale(as.numeric(lit)),
+         mage = scale(mage),
+         died = scale(died),
+         alive = scale(alive),
+         age = scale(age))
+```
+
+```{r bayesmix1, cache=TRUE}
+# Prior prediction
+priorpred <- rstanarm::stan_lmer(wt ~ sex + mage + lit + age + (age | id),
+                       prior_PD = TRUE, data = nepali3, chains = 1,
+                       seed = 101,
+                       refresh = 0)
+prior_summary(priorpred)
+```
+
+```{r bayesmix2, cache=TRUE}
+# Posterior prediction
+stanfit <- rstanarm::stan_lmer(wt ~ sex + mage + lit + age + (age | id),
+                 data = nepali3,
+                 chains = 4,
+                 seed = 101)
+```
+
+The following are diagnostics for the model:
+
+-   According to the (recent) rule of thumb, Rhat \< 1.01 means the Markov chains have converged (i.e. they have mixed well). For all parameters, Rhat is below this 1.01, so the chains appear to have mixed well.
+-   The effective sample sizes (ESS) for all of the parameters are greater than 1000, so we can say it is sufficient for stable estimates.
+-   The Monte Carlo standard error (MCSE) appears to be fair since all of the values are small.
+
+```{r bayesmix3}
+# Diagnostics
+print(bayestestR::diagnostic_posterior(stanfit), digits = 4)
+```
+
+Below is the trace plot. In each of the plots, the chains are all following a similar "caterpillar-like" pattern. In other words, the pattern is not too flat and does not take too many consecutive steps in the same direction. Thus, we can say the model appears to be mixing well.
+
+```{r bayesmix4}
+# Trace plot
+bayesplot::mcmc_trace(stanfit, regex_pars="Sigma") 
+```
+
+Below is the coefficient plot for the fit. The coefficients for all variables except sex are positive. This means an increase in age, mother's age, and mother's literacy are associated with an increase in weight. Age has a considerably large estimate compared to the other variables. Additionally, when sex increases (i.e. is female), then weight decreases.
+
+It's important to note that the 95% credible interval for mother's literacy contains 0 so there isn't enough statistical evidence to reject the possibility that mother's literacy does not have an influence on weight. All other credible intervals do not contain 0, so there is statistical evidence to reject the possibility that the variables do not have an influence on weight.
+
+```{r bayesmix5}
+# Coefficient plot
+dotwhisker::dwplot(tidy(stanfit,effects = "fixed"))
+```
+
+We now fit the model using MCMCglmm.
+
+```{r bayesmix6}
+# Using MCMCglmm
+mcmcfit <- MCMCglmm(wt ~ sex + mage + lit + age, random = ~us(age):id,
+              data = nepali3,
+              verbose=FALSE)
+```
+
+Below is the trace plot. Similar to the previous model, the trace plots for the MCMC fit has a "caterpillar-like" pattern too. The pattern is not too flat and does not take too many consecutive steps in the same direction. Thus, we can say the model appears to be mixing well.
+
+```{r bayesmix7}
+# Trace plot
+lattice::xyplot(mcmcfit$VCV)
+```
+
+Below is the coefficient plot for the model. The results are very similar to the coefficient plot for the rstanarm model. The coefficients for all variables except sex are positive. This means an increase in age, mother's age, and mother's literacy are associated with an increase in weight. Age has a considerably large estimate compared to the other variables. Additionally, when sex increases (i.e. is female), then weight decreases.
+
+The 95% credible interval for mother's literacy contains 0 so there isn't enough statistical evidence to reject the possibility that mother's literacy does not have an influence on weight. All other credible intervals do not contain 0, so there is statistical evidence to reject the possibility that the variables do not have an influence on weight. The credible interval for mother's literacy is also slightly wider than the remaining variables.
+
+```{r bayesmix8}
+# Coefficient plot
+dotwhisker::dwplot(tidy(mcmcfit,effects = "fixed"))
+```
+
+Here is the summary of the model. From the p-values, it appears that age, mage, and sex are the significant while sex is not (for a significance level of 0.05 or less).
+
+```{r bayesmix9}
+summary(mcmcfit)
+```
+
+## References
+
+::: {#refs}
+:::
+
+\newpage
+
+## Appendix
+
+```{r report-code, ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
